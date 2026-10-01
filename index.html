@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Shaded Topo Map</title>
+<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@5/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5/dist/maplibre-gl.js"></script>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;font:13px system-ui,sans-serif}
+  #map{position:absolute;inset:0}
+  #eebox{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  #ee{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;background:#fff;display:none}
+  #ui{position:absolute;top:10px;left:10px;z-index:1;background:#fff;padding:10px 12px;border-radius:6px;box-shadow:0 1px 6px rgba(0,0,0,.3);display:grid;grid-template-columns:auto auto;gap:6px 10px;align-items:center}
+  #ui input[type=number],#ui select{width:90px}
+  #ui button{grid-column:1/3}
+  #status{grid-column:1/3;color:#666;min-height:1em}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<canvas id="ee"></canvas>
+<canvas id="eebox"></canvas>
+<div id="ui">
+  <label>Projektion</label>
+  <select id="proj"><option value="globe">Globus</option><option value="mercator" selected>Mercator</option><option value="ee">Equal Earth (flächentreu)</option><option value="eew">Equal Earth Weltkarte</option><option value="rob">Robinson</option><option value="robw">Robinson Weltkarte</option><option value="laea">Lambert-Azimutal (flächentreu)</option></select>
+  <label>Mittelmeridian°</label><input id="lon0" type="number" min="-180" max="180" step="1" placeholder="Ausschnittsmitte" title="Equal Earth: fester Mittelmeridian. 0 = Ausschnitt der statischen Weltkarte (wie Weltkarten-Modus). Leer = Mitte des Ausschnitts">
+  <label>Mittelbreite°</label><input id="lat0" type="number" min="-90" max="90" step="1" placeholder="Ausschnittsmitte" title="Lambert-Azimutal: Breite des Kartenmittelpunkts (Europa/ETRS89-LAEA: 52). Leer = Mitte des Ausschnitts">
+  <label>Basemap</label>
+  <select id="base">
+    <option value="sat">Satellit (Esri)</option>
+    <option value="topo">Topographisch (Esri)</option>
+    <option value="osm">OpenStreetMap</option>
+    <option value="none">Nur Relief</option>
+  </select>
+  <label>Z-Faktor</label><input id="zf" type="number" value="8" min="0.1" step="1">
+  <label>Sonne Azimut°</label><input id="az" type="number" value="315" min="0" max="360" step="15">
+  <label>Sonne Höhe°</label><input id="alt" type="number" value="45" min="1" max="90" step="5">
+  <label>Stärke</label><input id="str" type="range" value="0.33" min="0" max="1" step="0.01">
+  <label title="Helle Seite der Berge. 0 = nur Schatten, matt. 0,6 = bisheriges Aussehen">Glanzlichter</label><input id="gl" type="range" value="0.1" min="0" max="1" step="0.05">
+  <label title="Städte, Grenzen, Gipfel mit Höhe, Flüsse">Beschriftung</label>
+  <select id="ref"><option value="">Aus</option><option value="#fff">Schrift weiß</option><option value="#000" selected>Schrift schwarz</option></select>
+  <label title="Nur Python-Export: Punkt neben Städten und Bergen, in Schriftfarbe ohne Umrandung">Punkte</label><input id="dots" type="checkbox">
+  <label>Label-Zoom</label><input id="lz" value="6" type="number" min="0" max="15" step="0.5" placeholder="wie Ansicht" title="Feste Zoomstufe für Städte/Grenzen (leer = aktuelle Ansicht)">
+  <label>Region W,S,O,N</label><span><input id="w" type="number" step="0.01" style="width:52px"> <input id="s" type="number" step="0.01" style="width:52px"> <input id="e" type="number" step="0.01" style="width:52px"> <input id="n" type="number" step="0.01" style="width:52px"></span>
+  <button id="fromview">Region aus Ansicht übernehmen</button>
+  <button id="draw">Rechteck in Karte zeichnen</button>
+  <label>Führende Seite</label><span><select id="fixedSide"><option value="width">Breite</option><option value="height">Höhe</option></select></span>
+  <label>Breite cm</label><input id="widthCm" type="number" value="100" min="5" step="1">
+  <label>Höhe cm</label><input id="heightCm" type="number" min="5" step="1" placeholder="automatisch">
+  <label>Verhältnis B:H</label><input id="ratio" type="number" min="0.0001" step="0.0001" placeholder="automatisch">
+  <label>Papier</label><select id="paper"><option>A4</option><option>A3</option><option>A2</option><option>A1</option><option>A0</option><option>B0</option><option value="full">Volles Bild (ein Blatt)</option></select>
+  <label>DPI</label><input id="dpi" type="number" value="600" min="50" max="1200" step="50">
+  <label title="Nur Python-PDF: maximale Größe einer Rechen-Kachel; die fertige PDF bleibt ein großes Blatt">Rechen-Kachel cm</label><input id="tilemm" type="number" value="50" min="0" max="100" step="5">
+  <label>Schrift pt</label><input id="pt" type="number" value="5" min="4" max="72" step="1" title="Städtenamen auf Papier; Ländernamen proportional größer">
+  <label title="PDF: eine Datei, eine Seite pro Blatt im Papierformat (JPEG-komprimiert, Qualität 95)">Format</label><select id="fmt"><option value="png">PNG (je Blatt eine Datei)</option><option value="jpg">JPG (je Blatt eine Datei, Qualität 95)</option><option value="pdf">PDF (eine Datei)</option></select>
+  <button id="export">Exportieren</button>
+  <button id="pyexport" title="Ein Bild in voller Größe ohne Blattgrenze, Text und Linien als Vektor (PDF). Braucht: py poster.py --serve und die Seite über http://localhost:8000">Mit Python exportieren</button>
+  <div id="status"></div>
+  <progress id="prog" style="grid-column:1/3;width:100%;display:none"></progress>
+</div>
+<script>
+const BASE = { // url, attribution, maxzoom (deeper requests would 404 → blank patches)
+  sat:  ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'Esri', 19],
+  topo: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', 'Esri, HERE, Garmin, FAO, NOAA, USGS', 19], // OpenTopoMap was throttled → hour-long exports
+  osm:  ['https://tile.openstreetmap.org/{z}/{x}/{y}.png', '© OpenStreetMap', 19],
+};
+const $ = id => document.getElementById(id);
+const PAPER = { A4: [210, 297], A3: [297, 420], A2: [420, 594], A1: [594, 841], A0: [841, 1189], B0: [1000, 1414] }; // mm
+const NE = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson';
+const status = t => $('status').textContent = t;
+const R = Math.PI / 180, mercY = lat => Math.log(Math.tan(Math.PI / 4 + lat * R / 2)), invMercY = y => (2 * Math.atan(Math.exp(y)) - Math.PI / 2) / R; // lat° ↔ Mercator y
+
+// --- Hillshade: hs://z/x/y?zf=..&az=..&alt=..&str=..  → PNG (black/white with alpha) ---
+maplibregl.addProtocol('hs', async (params) => {
+  const m = params.url.match(/^hs:\/\/(\d+)\/(\d+)\/(\d+)\?zf=([\d.]+)&az=([\d.]+)&alt=([\d.]+)&str=([\d.]+)&gl=([\d.]+)/);
+  const [z, x, y] = [m[1], m[2], m[3]].map(Number);
+  const zf = +m[4], az = +m[5], alt = +m[6], str = +m[7], gl = +m[8];
+  const img = await createImageBitmap(await (await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`)).blob());
+  const N = 256, c = new OffscreenCanvas(N, N), ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const px = ctx.getImageData(0, 0, N, N), d = px.data;
+  const h = new Float32Array(N * N);
+  for (let i = 0; i < N * N; i++) h[i] = d[i * 4] * 256 + d[i * 4 + 1] + d[i * 4 + 2] / 256 - 32768;
+  // cell size in meters at this tile's latitude
+  const lat = Math.atan(Math.sinh(Math.PI - 2 * Math.PI * (y + 0.5) / 2 ** z));
+  const cell = 40075016.686 * Math.cos(lat) / (N * 2 ** z), q = 1 / (8 * cell);
+  const zen = (90 - alt) * R, azm = ((360 - az + 90) % 360) * R;
+  const cz = Math.cos(zen), sz = Math.sin(zen), ca = Math.cos(azm), sa = Math.sin(azm);
+  const H = (r, col) => h[Math.min(N - 1, Math.max(0, r)) * N + Math.min(N - 1, Math.max(0, col))];
+  // ponytail: edges clamp within tile → faint seams between tiles; fetch neighbours if it bothers you
+  for (let r = 0; r < N; r++) for (let col = 0; col < N; col++) {
+    const a = H(r-1,col-1), b = H(r-1,col), cc = H(r-1,col+1), dd = H(r,col-1), f = H(r,col+1), g = H(r+1,col-1), hh = H(r+1,col), i = H(r+1,col+1);
+    const dx = ((cc + 2*f + i) - (a + 2*dd + g)) * q;
+    const dy = ((g + 2*hh + i) - (a + 2*b + cc)) * q;
+    // Lambert without per-pixel trig: = cz·cos(slope) + sz·sin(slope)·cos(azm − aspect) with slope = atan(zf·|∇h|), aspect = atan2(dy, −dx)
+    const s = (cz + sz * zf * (dy * sa - dx * ca)) / Math.sqrt(1 + zf * zf * (dx * dx + dy * dy)); // -1..1
+    // flat ground gives s = cz -> treat that as neutral, so plains stay untouched
+    const o = (r * N + col) * 4, lit = s > cz;
+    d[o] = d[o+1] = d[o+2] = lit ? 255 : 0;
+    const alpha = lit ? (s - cz) / (1 - cz) * gl : (cz - s) / cz; // highlights damped vs. shadows (gl = "Glanzlichter"; low = matte)
+    d[o+3] = Math.round(Math.min(1, Math.max(0, alpha)) * 255 * str);
+  }
+  ctx.putImageData(px, 0, 0);
+  return { data: await (await c.convertToBlob()).arrayBuffer() };
+});
+
+const map = new maplibregl.Map({
+  container: 'map', center: [10, 47], zoom: 5, maxPitch: 0, dragRotate: false,
+  preserveDrawingBuffer: true, attributionControl: { compact: false },
+  maxCanvasSize: [16384, 16384], // default 4096 silently clamps large exports
+  style: { version: 8, projection: { type: 'mercator' }, glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf', sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#fff' } }] },
+});
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }));
+// --- Equal Earth (Šavrič/Patterson/Jenny 2018): Mercator-Pixel → flächentreue Karte, fester Mittelmeridian ---
+const EE = (() => {
+  const A1 = 1.340264, A2 = -0.081106, A3 = 0.000893, A4 = 0.003796, M = Math.sqrt(3) / 2;
+  const fwd = (lon, lat) => { const l = Math.asin(M * Math.sin(lat)), l2 = l * l, l6 = l2 * l2 * l2;
+    return [lon * Math.cos(l) / (M * (A1 + 3 * A2 * l2 + l6 * (7 * A3 + 9 * A4 * l2))), l * (A1 + A2 * l2 + l6 * (A3 + A4 * l2))]; };
+  const invY = y => { let l = y, l2 = l * l, l6 = l2 * l2 * l2; // Newton for theta
+    for (let i = 0; i < 12; i++) { const d = (l * (A1 + A2 * l2 + l6 * (A3 + A4 * l2)) - y) / (A1 + 3 * A2 * l2 + l6 * (7 * A3 + 9 * A4 * l2)); l -= d; l2 = l * l; l6 = l2 * l2 * l2; if (Math.abs(d) < 1e-9) break; }
+    return l; };
+  const lonF = l => { const l2 = l * l, l6 = l2 * l2 * l2; return M * (A1 + 3 * A2 * l2 + l6 * (7 * A3 + 9 * A4 * l2)) / Math.cos(l); }; // lon = x·lonF(θ): grows with |θ|
+  // output pixel grid for bounds [w,s,e,n] (deg), outW px wide, central meridian lon0deg (default: centre of bounds)
+  const frame = ([w, s, e, n], outW, lon0deg = (w + e) / 2) => {
+    const lon0 = lon0deg * R, eq = Math.min(Math.max(0, s), n);
+    const pts = [[w, s], [w, n], [e, s], [e, n], [w, eq], [e, eq]].map(([a, b]) => fwd(a * R - lon0, b * R)), xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    const x0 = Math.min(...xs), k = outW / (Math.max(...xs) - x0), y1 = Math.max(...ys);
+    return { x0, y1, k, lon0, W: outW, H: Math.round((y1 - Math.min(...ys)) * k) };
+  };
+  // Mercator region [w,s,e,n] that feeds output window X,Y,W,H of frame fr, clipped to bounds (may come out empty/inverted)
+  const srcBounds = (fr, X, Y, W, H, [w, s, e, n]) => {
+    const ls = [Y, Math.min(Y + H, fr.H)].map(y => invY(fr.y1 - y / fr.k)), lats = ls.map(l => Math.asin(Math.sin(l) / M) / R);
+    const fs = ls.map(lonF); if (ls[0] * ls[1] < 0) fs.push(lonF(0)); // lonF monotonic in |θ| → extremes at the edge rows or the equator
+    const lons = []; for (const f of fs) for (const x of [X, X + W]) lons.push(((fr.x0 + x / fr.k) * f + fr.lon0) / R);
+    return [Math.max(w, Math.min(...lons)), Math.max(s, Math.min(...lats)), Math.min(e, Math.max(...lons)), Math.min(n, Math.max(...lats))];
+  };
+  // warp src canvas (Mercator, exactly covering [w,s,e,n]) into output window X,Y,W,H of frame fr → canvas W×H, transparent where no source
+  const warp = (src, [w, s, e, n], fr, X, Y, W, H) => {
+    const sw = src.width, sh = src.height, sc = document.createElement('canvas'); sc.width = sw; sc.height = sh;
+    const g = sc.getContext('2d'); g.drawImage(src, 0, 0);
+    const sd = g.getImageData(0, 0, sw, sh).data, od = new Uint8ClampedArray(W * H * 4), my0 = mercY(n), mys = my0 - mercY(s);
+    for (let y = 0; y < H; y++) {
+      const l = invY(fr.y1 - (Y + y + 0.5) / fr.k), lat = Math.asin(Math.sin(l) / M) / R, f = lonF(l);
+      const sy = Math.floor((my0 - mercY(lat)) / mys * sh); if (!(sy >= 0 && sy < sh)) continue; // also skips NaN rows beyond the frame
+      for (let x = 0; x < W; x++) {
+        const lon = ((fr.x0 + (X + x + 0.5) / fr.k) * f + fr.lon0) / R, sx = Math.floor((lon - w) / (e - w) * sw);
+        if (sx < 0 || sx >= sw) continue;
+        const si = (sy * sw + sx) * 4, oi = (y * W + x) * 4;
+        od[oi] = sd[si]; od[oi + 1] = sd[si + 1]; od[oi + 2] = sd[si + 2]; od[oi + 3] = sd[si + 3];
+      }
+    }
+    const out = document.createElement('canvas'); out.width = W; out.height = H; out.getContext('2d').putImageData(new ImageData(od, W, H), 0, 0);
+    return out;
+  };
+  // output pixel <-> lon/lat (deg) of frame fr: mouse picking + selection box in the preview
+  const unproject = (fr, ox, oy) => { const l = invY(fr.y1 - oy / fr.k), la = Math.asin(Math.sin(l) / M), lon = ((fr.x0 + ox / fr.k) * lonF(l) + fr.lon0) / R;
+    return isFinite(la) && Math.abs(lon - fr.lon0 / R) <= 180 ? [lon, la / R] : null; };
+  const project = (fr, lon, lat) => { const [x, y] = fwd(lon * R - fr.lon0, lat * R); return [(x - fr.x0) * fr.k, (fr.y1 - y) * fr.k]; };
+  return { frame, srcBounds, warp, unproject, project };
+})();
+// --- Robinson + Lambert-Azimutal (Kugel): gleiche Schnittstelle wie EE, aber generisch ueber Vorwaerts-/Rueckwaertsformel.
+// Ausgabepixel -> inv -> lon/lat -> Mercator-Quellpixel. ponytail: srcBounds tastet ein 33x33-Raster ab (+2 % Rand), Robinson ist linear zwischen den Tabellenwerten
+const PJ = (() => {
+  const PLEN = [1, .9986, .9954, .99, .9822, .973, .96, .9427, .9216, .8962, .8679, .835, .7986, .7597, .7186, .6732, .6213, .5722, .5322]; // Robinson-Tabelle, 5°-Schritte
+  const PDFE = [0, .062, .124, .186, .248, .31, .372, .434, .4958, .5571, .6176, .6769, .7346, .7903, .8435, .8936, .9394, .9761, 1];
+  const tab = (T, t) => { const i = Math.min(17, Math.floor(t)); return T[i] + (T[i + 1] - T[i]) * (t - i); }; // t = |lat| / 5°
+  const wrap = (deg, c) => deg - 360 * Math.round((deg - c) / 360); // in [c-180, c+180]
+  const mk = (kind, lat0) => {
+    if (kind === 'rob') return {
+      fwd: (l, p) => { const t = Math.abs(p) / (5 * R); return [.8487 * tab(PLEN, t) * l, Math.sign(p) * 1.3523 * tab(PDFE, t)]; },
+      inv: (x, y) => {
+        const v = Math.abs(y) / 1.3523; if (v > 1) return null;
+        let i = 0; while (i < 17 && PDFE[i + 1] < v) i++;
+        const t = i + (v - PDFE[i]) / (PDFE[i + 1] - PDFE[i]), l = x / (.8487 * tab(PLEN, t));
+        return Math.abs(l) > Math.PI ? null : [l, Math.sign(y) * t * 5 * R];
+      } };
+    const s0 = Math.sin(lat0), c0 = Math.cos(lat0); // Lambert-Azimutal (flaechentreu)
+    return {
+      fwd: (l, p) => { const sp = Math.sin(p), cp = Math.cos(p), cl = Math.cos(l), d = 1 + s0 * sp + c0 * cp * cl; return d < 1e-9 ? [NaN, NaN] : [Math.sqrt(2 / d) * cp * Math.sin(l), Math.sqrt(2 / d) * (c0 * sp - s0 * cp * cl)]; },
+      inv: (x, y) => {
+        const r = Math.hypot(x, y); if (r > 2) return null; if (r < 1e-12) return [0, lat0];
+        const c = 2 * Math.asin(r / 2), sc = Math.sin(c), cc = Math.cos(c);
+        return [Math.atan2(x * sc, r * c0 * cc - y * s0 * sc), Math.asin(Math.max(-1, Math.min(1, cc * s0 + y * sc * c0 / r)))];
+      } };
+  };
+  return kind => {
+    // output pixel grid for bounds [w,s,e,n] (deg), outW px wide; lon0/lat0 = projection centre (default: centre of bounds). kdeg = Mercator source px per degree lon that keeps full detail
+    const frame = ([w, s, e, n], outW, lon0deg = (w + e) / 2, lat0deg = (s + n) / 2) => {
+      const p = mk(kind, lat0deg * R), N = 40; let xa = Infinity, xb = -Infinity, ya = Infinity, yb = -Infinity;
+      for (let i = 0; i <= N; i++) for (let j = 0; j <= N; j++) {
+        const [x, y] = p.fwd((wrap(w + (e - w) * i / N, lon0deg) - lon0deg) * R, (s + (n - s) * j / N) * R);
+        if (isFinite(x) && isFinite(y)) { xa = Math.min(xa, x); xb = Math.max(xb, x); ya = Math.min(ya, y); yb = Math.max(yb, y); }
+      }
+      const k = outW / (xb - xa), m = s <= 0 && n >= 0 ? 0 : Math.min(Math.abs(s), Math.abs(n));
+      return { x0: xa, y1: yb, k, lon0deg, W: outW, H: Math.round((yb - ya) * k), p, kdeg: k * R * Math.cos(m * R) };
+    };
+    const srcBounds = (fr, X, Y, W, H, [w, s, e, n]) => {
+      const cw = (w + e) / 2, N = 32; let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+      for (let i = 0; i <= N; i++) for (let j = 0; j <= N; j++) {
+        const q = fr.p.inv(fr.x0 + (X + W * i / N) / fr.k, fr.y1 - (Y + H * j / N) / fr.k); if (!q) continue;
+        const lon = wrap(fr.lon0deg + q[0] / R, cw), lat = q[1] / R;
+        a = Math.min(a, lon); c = Math.max(c, lon); b = Math.min(b, lat); d = Math.max(d, lat);
+      }
+      if (a === Infinity) return [1, 1, 0, 0]; // window entirely outside the projection → callers skip it
+      const mx = (c - a) * .02 + .01, my = (d - b) * .02 + .01;
+      return [Math.max(w, a - mx), Math.max(s, b - my), Math.min(e, c + mx), Math.min(n, d + my)];
+    };
+    // warp src canvas (Mercator, exactly covering [w,s,e,n]) into output window X,Y,W,H of frame fr → canvas W×H, transparent where no source
+    const warp = (src, [w, s, e, n], fr, X, Y, W, H) => {
+      const sw = src.width, sh = src.height, sc = document.createElement('canvas'); sc.width = sw; sc.height = sh;
+      const g = sc.getContext('2d'); g.drawImage(src, 0, 0);
+      const sd = g.getImageData(0, 0, sw, sh).data, od = new Uint8ClampedArray(W * H * 4), my0 = mercY(n), mys = my0 - mercY(s), cw = (w + e) / 2;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const q = fr.p.inv(fr.x0 + (X + x + .5) / fr.k, fr.y1 - (Y + y + .5) / fr.k); if (!q) continue;
+        const sy = Math.floor((my0 - mercY(q[1] / R)) / mys * sh), sx = Math.floor((wrap(fr.lon0deg + q[0] / R, cw) - w) / (e - w) * sw);
+        if (!(sy >= 0 && sy < sh) || sx < 0 || sx >= sw) continue; // NaN (pole) fails the range test
+        const si = (sy * sw + sx) * 4, oi = (y * W + x) * 4;
+        od[oi] = sd[si]; od[oi + 1] = sd[si + 1]; od[oi + 2] = sd[si + 2]; od[oi + 3] = sd[si + 3];
+      }
+      const out = document.createElement('canvas'); out.width = W; out.height = H; out.getContext('2d').putImageData(new ImageData(od, W, H), 0, 0);
+      return out;
+    };
+    const unproject = (fr, ox, oy) => { const q = fr.p.inv(fr.x0 + ox / fr.k, fr.y1 - oy / fr.k); return q ? [wrap(fr.lon0deg + q[0] / R, 0), q[1] / R] : null; };
+    const project = (fr, lon, lat) => { const [x, y] = fr.p.fwd((wrap(lon, fr.lon0deg) - fr.lon0deg) * R, lat * R); return [(x - fr.x0) * fr.k, (fr.y1 - y) * fr.k]; };
+    return { frame, srcBounds, warp, unproject, project };
+  };
+})();
+const PR = () => { const v = $('proj').value; return v === 'ee' || v === 'eew' ? EE : PJ(v === 'laea' ? 'laea' : 'rob'); }; // active projection module
+const isWorld = () => ['eew', 'robw'].includes($('proj').value), isEE = () => ['ee', 'rob', 'laea'].includes($('proj').value) || isWorld();
+// selected box [w,s,e,n], null if incomplete or still being dragged. The export centres the projection on it, so the preview must too (else the outline is distorted differently)
+const boxNums = () => { const v = ['w', 's', 'e', 'n'].map(k => $(k).value); return drawing || v.some(x => x === '') ? null : v.map(Number); };
+const lat0 = () => $('lat0').value !== '' ? +$('lat0').value : moving ? moving.c[1] : (b => b && (b[1] + b[3]) / 2)(boxNums()) ?? undefined; // Lambert-Azimutal centre latitude; undefined → centre of the view
+const LAT = 85.051129, WORLD = [-180, -LAT, 180, LAT]; // Mercator limit → world map is cut at ±85°, pole line flat
+const bnds = () => { const b = map.getBounds(); return [b.getWest(), Math.max(-LAT, b.getSouth()), b.getEast(), Math.min(LAT, b.getNorth())]; };
+const lon0 = () => isWorld() ? 0 : $('lon0').value !== '' ? +$('lon0').value : moving ? moving.c[0] : (b => b && (b[0] + b[2]) / 2)(boxNums()) ?? undefined; // undefined → warp centres on the view
+const worldRect = () => { const a = map.project([-180, LAT]), b = map.project([180, -LAT]); return { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y }; }; // CSS px of the central world copy
+// static world map: view pinned to the whole world (central meridian 0°), no pan/zoom, until another projection is chosen
+function lockWorld() {
+  const on = isWorld();
+  if (on) map.fitBounds([[-180, -LAT], [180, LAT]], { animate: false, padding: 0 });
+  map.setMinZoom(on ? map.getZoom() : null); map.setMaxZoom(on ? map.getZoom() : null);
+  map.dragPan[on ? 'disable' : 'enable']();
+}
+map.on('resize', () => { if (!exporting) lockWorld(); });
+// ponytail: EE preview = warp of the Mercator view; low-res while moving, full-res once idle. Interactive regional EE would need d3-geo instead of MapLibre
+let exporting = false;
+function drawEE(q = 1) {
+  const ee = $('ee'); ee.style.display = isEE() ? 'block' : 'none';
+  if (!isEE()) { eeView = null; drawBox(); }
+  if (!isEE() || exporting) return;
+  const cv = map.getCanvas(), d = cv.width / cv.clientWidth, wr = isWorld() ? worldRect() : { x: 0, y: 0, w: cv.clientWidth, h: cv.clientHeight };
+  const sc = document.createElement('canvas'); sc.width = Math.round(wr.w * d * q); sc.height = Math.round(wr.h * d * q);
+  sc.getContext('2d').drawImage(cv, wr.x * d, wr.y * d, wr.w * d, wr.h * d, 0, 0, sc.width, sc.height);
+  const bounds = isWorld() ? WORLD : bnds(), P = PR(), fr = P.frame(bounds, sc.width, lon0(), lat0()), out = P.warp(sc, bounds, fr, 0, 0, fr.W, fr.H);
+  if (ee.width !== cv.width || ee.height !== cv.height) { ee.width = cv.width; ee.height = cv.height; }
+  const c = ee.getContext('2d'), r = Math.min(ee.width / out.width, ee.height / out.height), ow = out.width * r, oh = out.height * r;
+  c.clearRect(0, 0, ee.width, ee.height); c.drawImage(out, (ee.width - ow) / 2, (ee.height - oh) / 2, ow, oh);
+  eeView = { P, fr, r, offx: (ee.width - ow) / 2, offy: (ee.height - oh) / 2, d: ee.width / ee.clientWidth }; drawBox();
+}
+// selection box + mouse picking in the warped preview: the map itself stays Mercator underneath, so map coordinates are wrong here → invert the warp
+let eeView = null;
+function drawBox() {
+  const eb = $('eebox'), ee = $('ee'), g = eb.getContext('2d'), v = eeView, bx = ['w', 's', 'e', 'n'].map(k => $(k).value);
+  if (eb.width !== ee.width || eb.height !== ee.height) { eb.width = ee.width; eb.height = ee.height; }
+  g.clearRect(0, 0, eb.width, eb.height);
+  if (!v || !isEE() || bx.some(x => x === '')) return;
+  const [w, s, e, n] = bx.map(Number), edge = f => Array.from({ length: 41 }, (_, i) => f(i / 40));
+  const ring = [...edge(t => [w + (e - w) * t, n]), ...edge(t => [e, n + (s - n) * t]), ...edge(t => [e + (w - e) * t, s]), ...edge(t => [w, s + (n - s) * t])];
+  g.beginPath(); let pen = false;
+  for (const [lo, la] of ring) {
+    const q = v.P.project(v.fr, lo, la);
+    if (!isFinite(q[0]) || !isFinite(q[1])) { pen = false; continue; }
+    const x = v.offx + q[0] * v.r, y = v.offy + q[1] * v.r; pen ? g.lineTo(x, y) : g.moveTo(x, y); pen = true;
+  }
+  g.strokeStyle = '#f00'; g.lineWidth = 2 * v.d; g.setLineDash([4 * v.d, 4 * v.d]); g.stroke();
+  // exported image = bounding rectangle of the projected region (curve = region, corners outside stay white)
+  const pp = ring.map(([lo, la]) => v.P.project(v.fr, lo, la)).filter(q => isFinite(q[0]) && isFinite(q[1]));
+  if (pp.length) { const xs = pp.map(q => q[0]), ys = pp.map(q => q[1]), x0 = Math.min(...xs), y0 = Math.min(...ys);
+    g.setLineDash([]); g.strokeRect(v.offx + x0 * v.r, v.offy + y0 * v.r, (Math.max(...xs) - x0) * v.r, (Math.max(...ys) - y0) * v.r); }
+}
+// lon/lat under a CSS-px point of the preview (null outside the projection)
+const eeLL = (x, y) => { const v = eeView; return v.P.unproject(v.fr, (x * v.d - v.offx) / v.r, (y * v.d - v.offy) / v.r); };
+const safeEE = q => { try { drawEE(q); } catch (e) { status('Equal Earth: ' + e.message); console.error(e); } };
+map.on('idle', () => safeEE(1));
+map.on('render', () => { if (map.isMoving()) safeEE(0.35); });
+const aspect = bounds => {
+  if (isEE()) { const fr = PR().frame(bounds, 10000, $('lon0').value !== '' ? lon0() : (bounds[0] + bounds[2]) / 2, $('lat0').value !== '' ? lat0() : (bounds[1] + bounds[3]) / 2); return fr.W / fr.H; }
+  if ($('proj').value === 'globe') {
+    const box = boxNums(); if (!box) return map.getCanvas().clientWidth / map.getCanvas().clientHeight;
+    const pts = [[box[0], box[1]], [box[0], box[3]], [box[2], box[1]], [box[2], box[3]]].map(p => map.project(p));
+    const xs = pts.map(p => p.x), ys = pts.map(p => p.y); return (Math.max(...xs) - Math.min(...xs)) / (Math.max(...ys) - Math.min(...ys));
+  }
+  return (bounds[2] - bounds[0]) * R / (mercY(bounds[3]) - mercY(bounds[1]));
+};
+const outputWidthCm = bounds => +$('widthCm').value;
+function syncDimensions(updateRatio = false) {
+  const bounds = isWorld() ? WORLD : boxNums() ?? bnds(), ratio = aspect(bounds), width = +$('widthCm').value, height = +$('heightCm').value;
+  if (!(ratio > 0)) return;
+  if (updateRatio || !$('ratio').value) $('ratio').value = ratio.toFixed(4);
+  if ($('fixedSide').value === 'width' && width > 0) $('heightCm').value = (width / +$('ratio').value).toFixed(1);
+  if ($('fixedSide').value === 'height' && height > 0) $('widthCm').value = (height * +$('ratio').value).toFixed(1);
+}
+function resizeBox(oldWidth, oldHeight, newWidth, newHeight, field) {
+  const b = boxNums(); if (!b || !(oldWidth > 0 && oldHeight > 0 && newWidth > 0 && newHeight > 0)) return;
+  const [w, s, e, n] = b, sx = newWidth / oldWidth, sy = newHeight / oldHeight, target = newWidth / newHeight;
+  let xscale = sx, yscale = sy;
+  if ($('fixedSide').value === 'height' && (field === 'widthCm' || field === 'ratio')) {
+    yscale = 1;
+    for (let i = 0; i < 16; i++) { const east = w + (e - w) * xscale, actual = aspect([w, s, east, n]); if (!(actual > 0)) break; xscale *= target / actual; }
+  } else if ($('fixedSide').value === 'width' && (field === 'heightCm' || field === 'ratio')) {
+    xscale = 1;
+    for (let i = 0; i < 16; i++) { const north = invMercY(mercY(s) + (mercY(n) - mercY(s)) * yscale), actual = aspect([w, s, e, north]); if (!(actual > 0)) break; yscale *= actual / target; }
+  }
+  const east = w + (e - w) * xscale, north = invMercY(mercY(s) + (mercY(n) - mercY(s)) * yscale);
+  ['w', 's', 'e', 'n'].forEach((k, i) => $(k).value = [w, s, east, north][i].toFixed(5));
+  showBox(); syncDimensions(true);
+}
+function editDimension(field) {
+  const oldWidth = +$('widthCm').dataset.last || +$('widthCm').value, oldHeight = +$('heightCm').dataset.last || +$('heightCm').value;
+  let width = +$('widthCm').value, height = +$('heightCm').value, ratio = +$('ratio').value;
+  if (!(ratio > 0)) ratio = aspect(isWorld() ? WORLD : boxNums() ?? bnds());
+  if ($('fixedSide').value === 'width') {
+    if (field === 'heightCm') ratio = width / height;
+    else height = width / ratio;
+  } else {
+    if (field === 'widthCm') ratio = width / height;
+    else width = height * ratio;
+  }
+  if (field === 'ratio') { if ($('fixedSide').value === 'width') height = width / ratio; else width = height * ratio; }
+  $('ratio').value = ratio.toFixed(4); $('widthCm').value = width.toFixed(1); $('heightCm').value = height.toFixed(1);
+  resizeBox(oldWidth, oldHeight, width, height, field);
+  $('widthCm').dataset.last = width; $('heightCm').dataset.last = height;
+}
+$('proj').onchange = () => { map.setProjection({ type: isEE() ? 'mercator' : $('proj').value }); lockWorld(); syncDimensions(true); safeEE(1); };
+$('fixedSide').onchange = () => { const b = isWorld() ? WORLD : boxNums() ?? bnds(); $('ratio').value = aspect(b).toFixed(4); syncDimensions(); $('widthCm').dataset.last = $('widthCm').value; $('heightCm').dataset.last = $('heightCm').value; };
+for (const id of ['widthCm', 'heightCm', 'ratio']) $(id).addEventListener('change', () => editDimension(id));
+map.once('load', () => { syncDimensions(); $('widthCm').dataset.last = $('widthCm').value; $('heightCm').dataset.last = $('heightCm').value; }); map.on('moveend', () => { if (!boxNums()) syncDimensions(true); });
+$('lon0').addEventListener('change', () => { syncDimensions(true); safeEE(1); }); $('lat0').addEventListener('change', () => { syncDimensions(true); safeEE(1); });
+
+// export overrides: ts = CSS px per 256px tile (smaller → tiles from deeper zoom → sharper); F = scale for text/lines/dots; zView = zoom the region was chosen in (labels "wie Ansicht")
+let ts = 256, F = 1, zView = 0;
+function rebuild() {
+  const ids = ['sel', 'cities', 'city-dots', 'peaks', 'peak-dots', 'river-names', 'rivers', 'countries', 'borders', 'hs', 'base']; // all layers first: a source can't go while a layer still uses it
+  for (const id of ids) if (map.getLayer(id)) map.removeLayer(id);
+  for (const id of ids) if (map.getSource(id)) map.removeSource(id);
+  const b = BASE[$('base').value], fade = exporting ? 0 : 300; // no tile fade-in while exporting: fewer re-renders, idle sooner
+  if (b) {
+    map.addSource('base', { type: 'raster', tiles: [b[0]], tileSize: ts, maxzoom: b[2], attribution: b[1] });
+    map.addLayer({ id: 'base', type: 'raster', source: 'base', paint: { 'raster-fade-duration': fade } });
+  }
+  const q = `zf=${$('zf').value}&az=${$('az').value}&alt=${$('alt').value}&str=${$('str').value}&gl=${$('gl').value}`;
+  map.addSource('hs', { type: 'raster', tiles: [`hs://{z}/{x}/{y}?${q}`], tileSize: ts, maxzoom: 15, attribution: 'Elevation: Mapzen/AWS Terrain Tiles' });
+  map.addLayer({ id: 'hs', type: 'raster', source: 'hs', paint: { 'raster-resampling': 'linear', 'raster-fade-duration': fade } });
+  const col = $('ref').value;
+  if (col) {
+    const halo = col === '#000' ? 'rgba(255,255,255,.7)' : 'rgba(0,0,0,.7)', font = ['Open Sans Semibold'];
+    const Z = $('lz').value !== '' ? +$('lz').value : exporting ? zView : ['zoom']; // fixed label zoom or live zoom (export renders at another zoom → keep the view's)
+    const src = (id, f) => map.addSource(id, { type: 'geojson', data: `${NE}/${f}.geojson` });
+    src('borders', 'ne_10m_admin_0_boundary_lines_land');
+    map.addSource('countries', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    fetch(`${NE}/ne_110m_admin_0_countries.geojson`).then(r => r.json()).then(j => map.getSource('countries') && map.getSource('countries').setData({ type: 'FeatureCollection',
+      features: j.features.map(f => ({ type: 'Feature', properties: { NAME: f.properties.NAME }, geometry: { type: 'Point', coordinates: [f.properties.LABEL_X, f.properties.LABEL_Y] } })) }));
+    src('cities', 'ne_10m_populated_places_simple');
+    const sc = (z1, v1, z2, v2) => ['interpolate', ['linear'], Z, z1, v1 * F, z2, v2 * F]; // zoom-interpolated size × paper scale (F folded into the stops: "zoom" must stay top-level)
+    map.addLayer({ id: 'borders', type: 'line', source: 'borders', paint: { 'line-color': '#000', 'line-width': sc(3, 1, 10, 3) } });
+    map.addLayer({ id: 'countries', type: 'symbol', source: 'countries', layout: { 'text-field': ['get', 'NAME'], 'text-font': font, 'text-transform': 'uppercase', 'text-letter-spacing': 0.25, 'text-size': sc(3, 10, 8, 20) },
+      paint: { 'text-color': col, 'text-halo-color': halo, 'text-halo-width': F } });
+    map.addLayer({ id: 'city-dots', type: 'circle', source: 'cities', filter: ['<=', ['get', 'min_zoom'], Z], paint: { 'circle-radius': 2.5 * F, 'circle-color': col, 'circle-stroke-color': halo, 'circle-stroke-width': F } });
+    map.addLayer({ id: 'cities', type: 'symbol', source: 'cities', filter: ['<=', ['get', 'min_zoom'], Z],
+      layout: { 'text-field': ['get', 'name'], 'text-font': font, 'text-size': sc(3, 10, 10, 15), 'text-anchor': 'left', 'text-offset': [0.5, 0], 'symbol-sort-key': ['get', 'scalerank'] },
+      paint: { 'text-color': col, 'text-halo-color': halo, 'text-halo-width': F } });
+    // rivers (Natural Earth centerlines, own min_zoom/min_label) and notable peaks per range with elevation
+    src('rivers', 'ne_10m_rivers_lake_centerlines'); src('peaks', 'ne_10m_geography_regions_elevation_points');
+    const text = { 'text-color': col, 'text-halo-color': halo, 'text-halo-width': F }, peak = ['all', ['==', ['get', 'featurecla'], 'mountain'], ['<=', ['get', 'min_zoom'], Z]];
+    map.addLayer({ id: 'river-names', type: 'symbol', source: 'rivers', filter: ['<=', ['get', 'min_label'], Z], // names only, placed along the undrawn centerline
+      layout: { 'text-field': ['get', 'name'], 'text-font': font, 'text-size': sc(3, 8, 10, 12), 'symbol-placement': 'line', 'text-letter-spacing': 0.1 }, paint: text });
+    map.addLayer({ id: 'peak-dots', type: 'circle', source: 'peaks', filter: peak, paint: { 'circle-radius': 2 * F, 'circle-color': col, 'circle-stroke-color': halo, 'circle-stroke-width': F } });
+    map.addLayer({ id: 'peaks', type: 'symbol', source: 'peaks', filter: peak,
+      layout: { 'text-field': ['concat', ['coalesce', ['get', 'name_de'], ['get', 'name']], ' (', ['to-string', ['get', 'elevation']], ' m)'], 'text-font': font, 'text-size': sc(3, 8, 10, 12), 'text-anchor': 'top', 'text-offset': [0, 0.4], 'text-max-width': 30 }, paint: text }); // one line: "Großglockner (3798 m)"
+  }
+  if (!exporting) { map.addSource('sel', { type: 'geojson', data: selBox() }); map.addLayer({ id: 'sel', type: 'line', source: 'sel', paint: { 'line-color': '#f00', 'line-width': 2, 'line-dasharray': [2, 2] } }); }
+}
+// selected region as GeoJSON outline (empty collection if inputs incomplete)
+function selBox() {
+  const v = ['w', 's', 'e', 'n'].map(k => $(k).value);
+  if (v.some(x => x === '')) return { type: 'FeatureCollection', features: [] };
+  const [w, s, e, n] = v.map(Number);
+  return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] } };
+}
+const showBox = () => { map.getSource('sel') && map.getSource('sel').setData(selBox()); drawing || moving ? drawBox() : safeEE(1); }; // safeEE re-centres the warp on the box and ends in drawBox
+const setBox = (a, b) => { [['w', Math.min(a.lng, b.lng)], ['s', Math.min(a.lat, b.lat)], ['e', Math.max(a.lng, b.lng)], ['n', Math.max(a.lat, b.lat)]].forEach(([k, v]) => $(k).value = v.toFixed(5)); showBox(); syncDimensions(true); $('widthCm').dataset.last = $('widthCm').value; $('heightCm').dataset.last = $('heightCm').value; };
+for (const k of ['w', 's', 'e', 'n']) $(k).addEventListener('change', () => { showBox(); syncDimensions(true); $('widthCm').dataset.last = $('widthCm').value; $('heightCm').dataset.last = $('heightCm').value; });
+// draw mode: click button, drag on map → fills W,S,O,N. In the warped preview the dragged screen rectangle is inverted through the projection (lon/lat bounds of all four edges)
+let drawing = false, p0 = null, moving = null; // moving: dragging the finished box by its outline; c = projection centre frozen for the drag
+function dragBox(e) {
+  const a = p0.point, b = e.point;
+  if (!eeView) return setBox(p0.lngLat, e.lngLat);
+  const ll = [];
+  for (let i = 0; i <= 16; i++) { const t = i / 16, x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t; ll.push(eeLL(x, a.y), eeLL(x, b.y), eeLL(a.x, y), eeLL(b.x, y)); }
+  const p = ll.filter(Boolean); if (!p.length) return;
+  setBox({ lng: Math.min(...p.map(q => q[0])), lat: Math.min(...p.map(q => q[1])) }, { lng: Math.max(...p.map(q => q[0])), lat: Math.max(...p.map(q => q[1])) });
+}
+$('draw').onclick = () => { drawing = true; map.dragPan.disable(); map.getCanvas().style.cursor = 'crosshair'; status('Rechteck mit der Maus aufziehen'); };
+map.on('mousedown', e => { if (drawing) p0 = e; });
+map.on('mousemove', e => { if (drawing && p0) dragBox(e); });
+map.on('mouseup', e => { if (!drawing || !p0) return; dragBox(e); drawing = false; p0 = null; showBox(); syncDimensions(true); $('widthCm').dataset.last = $('widthCm').value; $('heightCm').dataset.last = $('heightCm').value; if (!isWorld()) map.dragPan.enable(); map.getCanvas().style.cursor = ''; status(''); });
+// move the finished box: grab its outline (within 6 px), drag → shifts W/E/S/N by the lon/lat delta under the cursor
+const cursorLL = e => eeView ? eeLL(e.point.x, e.point.y) : [e.lngLat.lng, e.lngLat.lat];
+function onOutline(pt) {
+  const b = boxNums(); if (!b) return false;
+  const [w, s, e, n] = b, edge = f => Array.from({ length: 41 }, (_, i) => f(i / 40));
+  const ring = [...edge(t => [w + (e - w) * t, n]), ...edge(t => [e, n + (s - n) * t]), ...edge(t => [e + (w - e) * t, s]), ...edge(t => [w, s + (n - s) * t])];
+  const xy = ring.map(([lo, la]) => { if (!eeView) { const q = map.project([lo, la]); return [q.x, q.y]; } const q = eeView.P.project(eeView.fr, lo, la); return [(eeView.offx + q[0] * eeView.r) / eeView.d, (eeView.offy + q[1] * eeView.r) / eeView.d]; });
+  for (let i = 1; i < xy.length; i++) {
+    const [ax, ay] = xy[i - 1], [bx, by] = xy[i], dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    if (![ax, ay, bx, by].every(isFinite)) continue;
+    const t = l2 ? Math.max(0, Math.min(1, ((pt.x - ax) * dx + (pt.y - ay) * dy) / l2)) : 0;
+    if (Math.hypot(pt.x - ax - t * dx, pt.y - ay - t * dy) < 6) return true;
+  }
+  return false;
+}
+map.on('mousedown', e => {
+  if (drawing || !onOutline(e.point)) return;
+  const ll = cursorLL(e); if (!ll) return;
+  moving = { ll, box: boxNums(), c: [lon0(), lat0()] }; map.dragPan.disable();
+});
+map.on('mousemove', e => {
+  if (drawing) return;
+  if (!moving) { map.getCanvas().style.cursor = onOutline(e.point) ? 'move' : ''; return; }
+  const ll = cursorLL(e); if (!ll) return;
+  const [w, s, ea, n] = moving.box, dlon = ll[0] - moving.ll[0], dlat = Math.max(-LAT - s, Math.min(LAT - n, ll[1] - moving.ll[1]));
+  setBox({ lng: w + dlon, lat: s + dlat }, { lng: ea + dlon, lat: n + dlat });
+});
+map.on('mouseup', () => { if (!moving) return; moving = null; showBox(); if (!isWorld()) map.dragPan.enable(); });
+map.on('load', () => {
+  rebuild();
+  for (const id of ['base', 'zf', 'az', 'alt', 'str', 'gl', 'ref', 'lz']) $(id).addEventListener('change', rebuild);
+});
+
+$('fromview').onclick = () => { const b = map.getBounds(); setBox(b.getSouthWest(), b.getNorthEast()); };
+
+// --- Export: one paper sheet per render, so memory and re-render cost never exceed one sheet ---
+const idle = () => new Promise(r => map.once('idle', r));
+let job = 0; const cancelled = me => { if (me !== job) throw new Error('abgebrochen'); }; // a new export supersedes the running one; checked after every await
+const size = (w, h) => { $('map').style.width = w ? w + 'px' : ''; $('map').style.height = h ? h + 'px' : ''; map.resize(); }; // container = canvas size in CSS px; no args → back to full window
+const shot = () => { const cv = map.getCanvas(); if (cv.width < cv.clientWidth * map.getPixelRatio() - 2) throw new Error('Canvas-Limit 16384 px: DPI, Breite oder Papier verkleinern'); return cv; };
+// Mercator region [w,s,e,n] → map canvas at zoom z0, container sized to exactly the region (+pad CSS px per side)
+async function shoot(z0, [w, s, e, n], pad = 0, onTile) {
+  const k = 512 * 2 ** z0 / 360; // CSS px per degree of lon / of Mercator y
+  size(Math.round((e - w) * k) + 2 * pad, Math.round((mercY(n) - mercY(s)) / R * k) + 2 * pad);
+  map.jumpTo({ center: [(w + e) / 2, invMercY((mercY(n) + mercY(s)) / 2)], zoom: z0 });
+  // tile-level progress: loaded-tile events vs. rough expected count (raster sources × tile grid; 256px tiles at the rounded zoom cover 181..362 CSS px); ponytail: cached tiles fire no event → capped at 90 %
+  const cv = map.getCanvas(), tsz = 256 * 2 ** (z0 + 1 - Math.round(z0 + 1)), expect = (2 - ($('base').value === 'none')) * (Math.ceil(cv.clientWidth / tsz) + 1) * (Math.ceil(cv.clientHeight / tsz) + 1);
+  let got = 0; const h = e => e.tile && onTile && onTile(Math.min(0.9, ++got / expect));
+  const me = job; map.on('sourcedata', h); await idle(); map.off('sourcedata', h); cancelled(me);
+  return shot();
+}
+// blob URLs instead of huge data URLs; browsers drop downloads fired in the same tick → callers await between files
+const save = (blob, name) => { const a = document.createElement('a'); a.download = name; a.href = URL.createObjectURL(blob); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000); };
+// minimal PDF: one page per {w,h,jpg} (px, JPEG bytes), page size = px at dpi. ponytail: no compression tuning, no metadata
+function pdf(pages, dpi) {
+  const enc = new TextEncoder(), parts = [], offs = []; let len = 0;
+  const add = d => { const b = typeof d === 'string' ? enc.encode(d) : d; parts.push(b); len += b.length; };
+  const obj = (id, head, stream) => { offs[id] = len; add(`${id} 0 obj\n<<${head}${stream ? `/Length ${stream.length}` : ''}>>\n`); if (stream) { add('stream\n'); add(stream); add('\nendstream\n'); } add('endobj\n'); };
+  add('%PDF-1.4\n'); obj(1, '/Type/Catalog/Pages 2 0 R'); obj(2, `/Type/Pages/Count ${pages.length}/Kids[${pages.map((_, i) => `${3 + 3 * i} 0 R`).join(' ')}]`);
+  pages.forEach((p, i) => {
+    const id = 3 + 3 * i, pw = (p.w * 72 / dpi).toFixed(2), ph = (p.h * 72 / dpi).toFixed(2);
+    obj(id, `/Type/Page/Parent 2 0 R/MediaBox[0 0 ${pw} ${ph}]/Resources<</XObject<</I ${id + 2} 0 R>>>>/Contents ${id + 1} 0 R`);
+    obj(id + 1, '', enc.encode(`q ${pw} 0 0 ${ph} 0 0 cm /I Do Q`));
+    obj(id + 2, `/Type/XObject/Subtype/Image/Width ${p.w}/Height ${p.h}/ColorSpace/DeviceRGB/BitsPerComponent 8/Filter/DCTDecode`, p.jpg);
+  });
+  const N = 2 + 3 * pages.length, x = len; add(`xref\n0 ${N + 1}\n0000000000 65535 f \n`);
+  for (let id = 1; id <= N; id++) add(`${String(offs[id]).padStart(10, '0')} 00000 n \n`);
+  add(`trailer\n<</Size ${N + 1}/Root 1 0 R>>\nstartxref\n${x}\n%%EOF\n`);
+  return new Blob(parts, { type: 'application/pdf' });
+}
+$('export').onclick = async () => {
+  const me = ++job, globe = $('proj').value === 'globe', cv = map.getCanvas();
+  const box = ['w', 's', 'e', 'n'].map(k => $(k).value), useBox = box.every(v => v !== '');
+  const bounds = isWorld() ? WORLD : useBox ? box.map(Number) : bnds(); let [w, s, e, n] = bounds;
+  if (useBox && !isWorld()) map.fitBounds([[w, s], [e, n]], { animate: false, padding: 0 });
+  zView = map.getZoom(); const c0 = map.getCenter();
+  let dpi = +$('dpi').value, W = Math.round(outputWidthCm(bounds) / 2.54 * dpi), kx = W / (e - w); // output px per degree lon
+  const P = isEE() ? PR() : null, fr = P ? P.frame(bounds, W, lon0(), lat0()) : null;
+  if (fr && fr.kdeg) kx = fr.kdeg; // Robinson/Lambert: source scale from the projection, not from the lon range
+  // Mercator/EE: pixel ratio 1, zoom chosen so the region is W px wide, each sheet rendered on its own.
+  // Globe: its perspective depends on the viewport size → one render of the whole image at ratio pr (canvas limit applies)
+  let pr = 1, z0 = Math.log2(kx * 360 / 512), H = fr ? fr.H : Math.round((mercY(n) - mercY(s)) / R * kx), crop = { x: 0, y: 0, w: cv.clientWidth, h: cv.clientHeight };
+  if (globe) {
+    if (useBox) {
+      const p = [[w, s], [w, n], [e, s], [e, n]].map(c => map.project(c)), xs = p.map(c => c.x), ys = p.map(c => c.y);
+      crop.x = Math.max(0, Math.min(...xs)); crop.y = Math.max(0, Math.min(...ys)); crop.w = Math.min(cv.clientWidth, Math.max(...xs)) - crop.x; crop.h = Math.min(cv.clientHeight, Math.max(...ys)) - crop.y;
+    }
+    pr = W / crop.w; z0 = zView; H = Math.round(crop.h * pr);
+  }
+  // sheet size in px; orientation with fewer sheets
+  const [pw, ph] = $('paper').value === 'full' ? [W, H] : PAPER[$('paper').value].map(mm => Math.round(mm / 25.4 * dpi)), sheets = (a, b) => Math.ceil(W / a) * Math.ceil(H / b);
+  const [tw, th] = sheets(pw, ph) <= sheets(ph, pw) ? [pw, ph] : [ph, pw], cols = Math.ceil(W / tw), rows = Math.ceil(H / th);
+  const fmt = $('fmt').value, pages = []; // pdf: JPEG pages collected, one file at the end
+  const lab = $('ref').value ? `_lz${$('lz').value !== '' ? $('lz').value : zView.toFixed(1)}_${$('pt').value}pt` : ''; // label zoom + text size only when labels are on
+  const name = `topo_${$('proj').value}_${$('base').value}_zf${$('zf').value}_${(W / dpi * 2.54).toFixed(1)}cm_${dpi}dpi${lab}`;
+  if (Math.max(tw, th) > 16384) return status(`Blatt zu groß für ein Canvas (${tw}×${th} px, Limit 16384 je Seite): DPI oder Größe verkleinern oder Papierformat wählen`);
+  if (tw * th > 16384 * 16384) return status(`Blatt zu groß für den Browser (${tw}×${th} px, max. 268 Mio. px): DPI oder Papier verkleinern`);
+  if (globe && Math.max(W, H) > 16384) return status(`Globus: Bild zu groß für ein Canvas (${W}×${H} px, Limit 16384): Mercator wählen oder DPI verkleinern`);
+  // render output window X,Y,Wc,Hc into sheet context g at dx,dy; splits the window until its Mercator source fits one modest canvas (EE stretches up to 11× near ±85°)
+  const L = 4096;
+  const paint = async (g, X, Y, Wc, Hc, dx, dy) => {
+    const b = fr ? P.srcBounds(fr, X, Y, Wc, Hc, bounds) : [w + X / kx, invMercY(mercY(n) - (Y + Hc) / kx * R), w + (X + Wc) / kx, invMercY(mercY(n) - Y / kx * R)];
+    const share = Wc * Hc / (tw * th), base = +$('prog').value; // progress = sheets done + area share of the current sheet
+    if (!(b[0] < b[2] && b[1] < b[3]) || Wc < 1 || Hc < 1) { $('prog').value = base + share; return; } // window outside the map (EE corners) → stays white
+    if ((b[2] - b[0]) * kx > L || (mercY(b[3]) - mercY(b[1])) / R * kx > L) {
+      if (Wc >= Hc) { const h = Math.ceil(Wc / 2); await paint(g, X, Y, h, Hc, dx, dy); await paint(g, X + h, Y, Wc - h, Hc, dx + h, dy); }
+      else { const h = Math.ceil(Hc / 2); await paint(g, X, Y, Wc, h, dx, dy); await paint(g, X, Y + h, Wc, Hc - h, dx, dy + h); }
+      return;
+    }
+    await shoot(z0, b, fr ? 1 : 0, f => $('prog').value = base + share * f);
+    if (fr) { const bb = map.getBounds(); g.drawImage(P.warp(cv, [bb.getWest(), bb.getSouth(), bb.getEast(), bb.getNorth()], fr, X, Y, Wc, Hc), dx, dy); }
+    else { const p = map.project([b[0], b[3]]); g.drawImage(cv, dx - Math.round(p.x), dy - Math.round(p.y)); } // ponytail: windows beyond ±85° get shifted by MapLibre's view constraint → white there
+    $('prog').value = base + share;
+  };
+  exporting = true; map.setMinZoom(null); map.setMaxZoom(null); map.setPixelRatio(pr);
+  ts = 256 / Math.max(1, 2 ** Math.round(Math.log2(pr))); // tiles from log2(pr) deeper zoom levels so detail matches pixel count
+  F = (+$('pt').value / 72 * dpi) / pr / 10;              // city text (10 CSS px base) → pt on paper
+  try {
+    rebuild();
+    if (globe) { status('Rendere…'); $('prog').removeAttribute('value'); $('prog').style.display = ''; size(Math.round(crop.w), Math.round(crop.h)); if (useBox) map.fitBounds([[w, s], [e, n]], { animate: false, padding: 0 }); await idle(); cancelled(me); shot(); }
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const X = c * tw, Y = r * th; status(`Rendere Blatt ${r * cols + c + 1}/${rows * cols}…`);
+      $('prog').max = rows * cols; $('prog').value = r * cols + c; $('prog').style.display = ''; // ponytail: advances per finished sheet, not per tile
+      const t = document.createElement('canvas'); t.width = tw; t.height = th;
+      const g = t.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, tw, th); // partial last sheet stays white beyond the map
+      if (globe) g.drawImage(cv, -X, -Y); else await paint(g, X, Y, tw, th, 0, 0);
+      const blob = await new Promise(res => t.toBlob(res, fmt === 'png' ? 'image/png' : 'image/jpeg', 0.95)); cancelled(me);
+      if (fmt === 'pdf') pages.push({ w: tw, h: th, jpg: new Uint8Array(await blob.arrayBuffer()) });
+      else save(blob, `${name}${cols * rows > 1 ? `_zeile${r + 1}_spalte${c + 1}` : ''}.${fmt}`);
+    }
+    if (fmt === 'pdf') { cancelled(me); save(pdf(pages, dpi), `${name}.pdf`); } // pages in reading order: row by row, left to right
+    status(`Exportiert: ${W}×${H} px, ${cols}×${rows} Blatt ${$('paper').value} ${tw > th ? 'quer' : 'hoch'}`);
+  } catch (err) { if (me !== job) return; status('Export fehlgeschlagen: ' + err.message); console.error(err); } // superseded job: the new one owns status, map state and cleanup
+  exporting = false; map.setPixelRatio(window.devicePixelRatio); ts = 256; F = 1; $('prog').style.display = 'none';
+  size(); map.jumpTo({ center: c0, zoom: zView }); lockWorld(); rebuild();
+};
+// --- Python-Export: schickt die Einstellungen an `py poster.py --serve` (gleiche Herkunft, http://localhost:8000); kein Blatt-/Canvas-Limit ---
+$('pyexport').onclick = async () => {
+  const v = $('proj').value, box = ['w', 's', 'e', 'n'].map(k => $(k).value), useBox = box.every(x => x !== '');
+  if (location.protocol !== 'http:') return status('Python-Export: zuerst py poster.py --serve starten und die Seite über http://localhost:8000 öffnen');
+  if ($('fmt').value === 'jpg') return status('Python-Export: JPG nicht unterstützt (PNG oder PDF wählen)');
+  if (v === 'globe') return status('Python-Export: Globus wird nicht unterstützt');
+  const body = { proj: v, region: isWorld() ? WORLD : useBox ? box.map(Number) : bnds(), lon0: lon0(), lat0: lat0(), base: $('base').value, cm: outputWidthCm(isWorld() ? WORLD : useBox ? box.map(Number) : bnds()), dpi: +$('dpi').value, tileMm: $('fmt').value === 'pdf' ? +$('tilemm').value * 10 : 0, pt: +$('pt').value, fmt: $('fmt').value,
+    labels: !!$('ref').value, dots: $('dots').checked, text: $('ref').value === '#fff' ? 'white' : 'black', labelZoom: $('lz').value !== '' ? +$('lz').value : map.getZoom(),
+    hs: { zf: +$('zf').value, az: +$('az').value, alt: +$('alt').value, str: +$('str').value, gl: +$('gl').value } }; // undefined lon0/lat0 fall out of the JSON → poster.py centres on the region
+  $('pyexport').disabled = true; $('prog').max = 1; $('prog').value = 0; $('prog').style.display = '';
+  try {
+    const r = await fetch('/render', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    for (;;) {
+      await new Promise(ok => setTimeout(ok, 1500));
+      let s; for (let i = 0; ; i++) try { s = await (await fetch('/status?id=' + j.id)).json(); break; } catch (e) { if (i >= 4) throw e; await new Promise(ok => setTimeout(ok, 2000)); } // short hiccups (busy machine) are not fatal
+      $('prog').value = s.pct; status(`Python: ${Math.round(s.pct * 100)} % – ${s.log}`);
+      if (s.state === 'run') continue;
+      if (s.state === 'error') throw new Error(s.log);
+      const a = document.createElement('a'); a.href = '/out/' + s.file; a.textContent = s.file + ' herunterladen';
+      $('status').textContent = 'Fertig, gespeichert in poster_out/ – '; $('status').appendChild(a); break;
+    }
+  } catch (err) { status(err instanceof TypeError ? 'Python-Export: Server nicht erreichbar. Läuft py poster.py --serve noch (Terminal offen) und ist diese Seite über dessen Adresse geöffnet? Ein gestarteter Auftrag rechnet trotzdem weiter, fertige Dateien liegen in poster_out/.' : 'Python-Export fehlgeschlagen: ' + err.message); }
+  $('pyexport').disabled = false; $('prog').style.display = 'none';
+};
+</script>
+</body>
+</html>
